@@ -1,0 +1,43 @@
+- init함수: 사용하는 레지스터를 정리하고 초기화하는 함수
+void init(void){
+DDRC= 0x38; //pc0,pc1,pc2 digitalout
+DDRD= 0xff; // 1111 1111
+DDRB= 0x3f; // 0011 1111
+PORTC= 0X04; //PC1,PC2 PULL UP INPUT
+PCICR |= (1<<PCIE1);
+PCMSK1 |= (1<<PCINT10);
+sei();
+rowTotalControl(0x00); //init
+PORTB= 0x3f;
+PORTD = (PORTD&0X7f)|0x80;
+}
+- rowTotalControl함수: 모든 layer에 입력 받은 data값을 보내준다.
+void rowTotalControl(int data){
+PORTD = (PORTD&0X80)|(data&0x7f);
+for(int i=0;i<7;i++){
+PORTC = (PORTC&0Xc7)|((layerA[i]&0x07)<<3);
+}
+}
+- layerTotalControl함수: 입력 받은 data배열 값에 따라 layer(74hc574)의 clock이 변할 때
+data를 보내준다.
+void layerTotalControl(int *data){
+for(int i=0;i<8;i++){
+PORTC = (PORTC&0Xc7)|((layerA[i]&0x07)<<3);
+PORTD = (PORTD&0X80)|(data[i]&0x7f);
+}
+}
+- columnTotalControl함수: 입력 받은 data값으로 transistor를 제어한다.
+void columeTotalControl(int data){
+PORTB = (PORTB&0Xc0)|(data&0x3f);
+PORTD = (PORTD&0X7f)|((data&0x40)<<1);
+}
+- pointControl함수: 74hc138의 input인 An값중 쓰지 않는 값을 이용해서 한 층을 제어한다.
+void pointControl(unsigned char layer, unsigned char row,unsigned char
+colume,unsigned int temp_t1){
+PORTB = (PORTB&0Xc0)|(colume&0x3f); // select tr 1bit~6bit
+PORTD = (PORTD&0X7f)|((colume&0x40)<<1); // select tr 7it
+PORTC = (PORTC&0Xc7)|((layer&0x07)<<3); // select layer
+PORTD = (PORTD&0X80)|(row&0x7f);
+PORTC |= 0x38;
+delay_time(temp_t1);
+}
