@@ -1,0 +1,88 @@
+/////////////////////////////////////////////////////////////////////////////    
+ //this is summary code
+/////////////////////////////////////////////////////////////////////////////    
+
+void setup()
+  pinMode(datap, OUTPUT); //analog(4) pin //shift regiser 14 pin
+  pinMode(latchp, OUTPUT); //analog(3) pin //shift regiser 12 pin
+  pinMode(clockp, OUTPUT); //analog(2) pin //shift regiser 11 pin
+  pinMode(datap, OUTPUT); //mode change button
+  pinMode(datap, OUTPUT); //on/off button
+  pinMode(datap, OUTPUT); //dc motor foward
+  pinMode(datap, OUTPUT); //dc motor reverse
+  
+  pinMode(led, OUTPUT);
+  pinMode(trig_front, OUTPUT);       //analog(0) pin ultra_sonic send(front)
+  pinMode(echo_front, INPUT_PULLUP); //analog(1) pin ultra_sonic reception(front)
+  pinMode(trig_front, OUTPUT);       //analog(7) pin ultra_sonic send(front)
+  pinMode(echo_front, INPUT_PULLUP); //analog(8) pin ultra_sonic reception(front)
+  pinMode(trig_front, OUTPUT);      //analog(4) pin ultra_sonic send(front)
+  pinMode(echo_front, INPUT_PULLUP); //analog(10) pin ultra_sonic reception(front)
+  servo.attach(servo_data);         //digital(9) pin servo_motor setup
+  
+  attachInterrup(0, INT0_ISR, FALLING); //mode change button intterrupt setup
+  attachInterrup(1, INT1_ISR, FALLING); //on/off button intterrupt setup
+  Serial.begin(9600);
+  
+  digitalWrite(trig_front, LOW);
+  digitalWrite(trig_left, LOW);
+  digitalWrite(trig_right, LOW);
+  
+  state=0;
+  master=0;
+  i=0;
+  a=0;
+  
+  for(j=0; j<8; j++) {
+    digitalWrite(latchp, LOW);
+    shiftOut(datap, clockp, MSFIRST, 0<<j);
+    digitalWrite(latchp, HIGH);
+   }
+  }
+  
+  void loop(){
+    digitalWrite(led, HIGH);
+    
+    if(master==1 || master==2){
+      if(i==0){
+        servo.write(90);
+        Serial.println("Hello");
+        digitalWrite(latchp,LOW);
+        shiftOut(datap, clockp, MSBFIRST, 119); // rgb_green, yellow_led(left, right)x2, red_ledx2 Bright
+        digitalWrite(latchp, HIGH);
+      }
+      
+      if(state==1 && i==1) {
+        Serial.println("Smart Driving");
+        digitalWrite(latchp,LOW);
+        shiftOut(datap, clockp, MSBFIRST, 1<<1);
+        digitalWrite(latchp, HIGH);
+        servo.write(90);
+        digitalWrite(5, LOW);
+        digitalWrite(6, LOW);
+        state=2;
+      }
+      
+      
+      if(state==3 && i==1) {
+        Serial.println("Turn left");
+        digitalWrite(latchp,LOW);
+        shiftOut(datap, clockp, MSBFIRST, 1<<3);
+        digitalWrite(latchp, HIGH);
+        servo.write(90);
+        digitalWrite(5, LOW);
+        digitalWrite(6, LOW);
+        b=0;
+        state=4;
+      }
+      master=2;
+      i=1;
+      Cruise_Control();
+      obstacle_detection();
+    }
+    
+    if(master==3){
+      Serial.println("GOOD BYE");
+      shutdown_init();
+    }
+ }
