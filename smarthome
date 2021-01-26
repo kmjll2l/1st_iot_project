@@ -1,0 +1,616 @@
+#include <SoftwareSerial.h>                                 //LCD Sensor library
+#include <DHT.h>                                            //tinyDHT sensor library
+#include <Adafruit_Sensor.h>                                //tinyDHT sensor library
+#include <DHT_U.h>                                          //tinyDHT sensor library
+#include <Wire.h>                                           //I2C Communication(DHT)
+
+#define led_Y               A0                              //평상시(Safe)
+#define led_R               A1                              //위험경고시(Warning)
+#define buzzer1             A2                              //부저1(경고)_거실 ACTIVE형식
+#define buzzer2             A3                              //부저2(경고)_침실 ACTIVE형식
+#define pir_Sensor1         12                              //인체감지센서1_베란다
+#define pir_Sensor2         13                              //인체감지센서2_현관
+#define ir1                 2                               //적외선 인체감지센서1_베란다
+#define ir2                 3                               //적외선 인체감지센서2_베란다
+#define ir3                 4                               //적외선 인체감지센서3_베란다
+#define ir4                 5                               //적외선 인체감지센서4_베란다
+#define blueRx              6                               //RX(HC-06), TX(Arduino)
+#define blueTx              7                               //TX(HC-06), RX(Arduino)
+#define DHTPIN              8                               //온도, 습도 센서
+#define DHTTYPE             DHT11                           //DHT타입 DHT11로 정의
+
+SoftwareSerial BT(blueTx, blueRx);                          //시리얼 통신을 위한 객체선언
+
+String ReciveBTString;                                      //블루투스 통신 문자열 변수
+String ReciveSRString;                                      //시리얼 통신 문자열 변수
+char ReciveBT;                                              //블루투스 통신 수신데이터 문자 변수
+char ReciveSR;                                              //시리얼 통신 수신데이터 문자 변수
+String inString1;                                           //안드로이드 시간 값 변수
+
+DHT_Unified dht(DHTPIN, DHTTYPE);                           //DHT설정 - dht (디지털8, dht11)
+sensors_event_t event;                                      //DHT 이벤트주소 변수 선언
+
+boolean pir_val1 = 0;                                       //인체감지센서1 변수
+boolean pir_val2 = 0;                                       //인체감지센서2 변수
+boolean ir_val1 = 0;                                        //적외선 인체감지센서1 변수
+boolean ir_val2 = 0;                                        //적외선 인체감지센서2 변수
+boolean ir_val3 = 0;                                        //적외선 인체감지센서3 변수
+boolean ir_val4 = 0;                                        //적외선 인체감지센서4 변수
+String state = "방범제어(기본모드)";
+
+volatile int hours;                                         //시간 변수
+int startHourTime = 19;                                     //방범모드 시간 시간
+int endHourTime = 7;                                        //방범모드 종료 시간
+volatile boolean outingMode = false;                        //외출모드 활성화 여부
+unsigned long previousTime = 0;                             //멀티태스킹 전체 이전시간
+unsigned long currentTime = 0;                              //멀티태스킹 전체 현재시간
+const long delayTime = 1000;                                //멀티태스킹 전체 딜레이
+unsigned long buzzerPreviousTime = 0;                       //멀티태스킹 부저 이전시간
+unsigned long buzzerCurrentTime = 0;                        //멀티태스킹 부저 현재시간
+unsigned long buzzerdelayTime = 300;                        //멀티태스킹 부저 딜레이
+const byte buzzerCount = 3;                                 //부저활성화 카운터
+volatile boolean buzzerState = false;                       //부저활성화 여부
+float temp = 0.0;                                           //온도 값 저장
+float humi = 0.0;                                           //습도 값 저장
+void setup()
+{
+    Wire.begin();                                           //I2C통신 활성화
+    dht.begin();                                            //DHT센서 활성화
+    sensor_t sensor;                                        //DHT센서 sensor Structure 활성화
+
+    Serial.begin(9600);                                     //시리얼 통신 활성화
+    BT.begin(9600);                                         //블루투스 통신 활성화
+
+    //온도센서 정보 Serial Print
+    dht.temperature().getSensor(&sensor);
+
+    //습도센서 정보 Serial Print
+    dht.humidity().getSensor(&sensor);
+
+    //센서 Setup
+    pinMode(pir_Sensor1, INPUT);                            //PIR1 Sensor Setup
+    pinMode(pir_Sensor2, INPUT);                            //PIR2 Sensor Setup
+    pinMode(ir1, INPUT);                                    //ir1 Sensor Setup
+    pinMode(ir2, INPUT);                                    //ir2 Sensor Setup
+    pinMode(ir3, INPUT);                                    //ir3 Sensor Setup
+    pinMode(ir4, INPUT);                                    //ir4 Sensor Setup
+
+    //알림 Setup
+    pinMode(led_Y, OUTPUT);                                 //LED YELLOW Setup
+    pinMode(led_R, OUTPUT);                                 //LED RED Setup
+    pinMode(buzzer1, OUTPUT);                               //Buzzer1 Setup 
+    pinMode(buzzer2, OUTPUT);                               //buzeer2 Setup
+}
+
+void loop()
+{
+    dhtRead();
+
+    warning_Sensor(buzzerCount, buzzerdelayTime);
+
+    bluetooth_Send_Recive();
+}
+
+//현재상태 블루투스 통신
+void stateBTPrint()
+{
+    BT.print(state);
+    BT.print(",");
+    dht_BTPrint();
+}
+
+//Assign to variable temp & humi
+void dhtRead()
+{
+    dht.temperature().getEvent(&event);                     //DHT 이벤트주소 온도 변수에 할당
+    temp = event.temperature;
+    dht.humidity().getEvent(&event);                        //DHT 이벤트주소 습도 변수에 할당
+    humi = event.relative_humidity;
+}
+
+//DHT Sensor Bluetooth Print
+void dht_BTPrint()
+{
+    BT.print(temp);                                         //이벤트 구조체 온도값을 블루투스로 전달
+    BT.print(",");
+    BT.println(humi);                                       //이벤트 구조체 습도값을 블루투스로 전달
+}
+
+//방법상태 센서 및 경고음
+void warning_Sensor(int count, int warning_Intalval)
+{
+    pir_val1 = digitalRead(pir_Sensor1);
+    pir_val2 = digitalRead(pir_Sensor2);
+    ir_val1 = digitalRead(ir1);
+    ir_val2 = digitalRead(ir2);
+    ir_val3 = digitalRead(ir3);
+    ir_val4 = digitalRead(ir4);
+
+    currentTime = millis();
+
+    if ((hours < endHourTime && hours >= startHourTime || outingMode == true) && currentTime - previousTime >= delayTime)
+    {
+        if (pir_val1 == 1 || pir_val2 == 1 || ir_val1 == 1 || ir_val2 == 1 || ir_val3 == 1 || ir_val4 == 1)
+        {
+            digitalWrite(led_R, HIGH);
+            digitalWrite(led_Y, LOW);
+            state = "Warning";
+            stateBTPrint();
+            Serial.println(state);
+            buzzerState = true;
+            buzzerActive(count, warning_Intalval);          //위험경고상태 알림음(부저) 횟수
+        }
+
+        else
+        {
+            digitalWrite(led_R, LOW);
+            digitalWrite(led_Y, HIGH);
+            digitalWrite(buzzer1, LOW);
+            digitalWrite(buzzer2, LOW);
+            state = "Safe";
+            stateBTPrint();
+        }
+        previousTime = currentTime;
+    }
+
+    else if (currentTime - previousTime >= delayTime)
+    {
+        stateBTPrint();
+        previousTime = currentTime;
+    }
+}
+
+//At Warning Buzzer Active
+void buzzerActive(int count, int warning_Intalval)
+{
+    buzzerCurrentTime = millis();
+
+    if ((buzzerState == true) && (buzzerCurrentTime - buzzerPreviousTime >= buzzerdelayTime))
+    {
+        digitalWrite(buzzer1, HIGH);
+        digitalWrite(buzzer2, HIGH);
+        buzzerState = false;
+        buzzerPreviousTime = buzzerCurrentTime;
+    }
+
+    else if ((buzzerState == false) && buzzerCurrentTime - buzzerPreviousTime >= buzzerdelayTime)
+    {
+        digitalWrite(buzzer1, LOW);
+        digitalWrite(buzzer2, LOW);
+        buzzerState = true;
+        buzzerPreviousTime = buzzerCurrentTime;
+    }
+}
+
+//블루투스, 시리얼 통신(수신, 송신)
+void bluetooth_Send_Recive()
+{
+    while (BT.available())                                  //블루투스 수신데이터가 있는동안
+    {
+        ReciveBTString = BT.readStringUntil('\n');
+        delay(5);                                           //수신 문자열 끊김 방지
+    }
+    while (Serial.available()) {                            //시리얼 수신데이터가 있는동안
+        ReciveSRString = Serial.readStringUntil('\n');
+        delay(5);                                           //수신 문자열 끊김 방지 
+    }
+    if (!ReciveBTString.equals(""))                         //ReciveBTString 값이 있다면
+    {
+        int index1 = ReciveBTString.indexOf(')');
+        int index = ReciveBTString.length();
+        inString1 = ReciveBTString.substring(0, index1 + 1);
+        String inString2 = ReciveBTString.substring(index1 + 1, index - 1);
+        String inString3 = ReciveBTString.substring(12, 14);
+
+        char inString4[] = { 0 };
+
+        hours = inString3.toInt();
+
+        inString2.toCharArray(inString4, index);
+
+        if (strcmp(inString4, "cpca") == 0)
+        {
+            outingMode = false;
+            digitalWrite(led_Y, LOW);
+            digitalWrite(led_R, LOW);
+            digitalWrite(buzzer1, LOW);
+            digitalWrite(buzzer2, LOW);
+            state = "방범제어(기본모드)";
+            Serial.print(inString1);
+            Serial.println("방범제어 - 기본모드");
+        }
+
+        if (strcmp(inString4, "cpcm") == 0)
+        {
+            outingMode = true;
+            Serial.print(inString1);
+            Serial.println("방범제어 - 외출모드");
+        }
+
+        if (strcmp(inString4, "Time") == 0)
+        {
+            ReciveBTString = "";                            //초기화
+        }
+
+        else
+        {
+            if (strcmp(inString4, "ledhigh") == 0) { state = "LED ON"; }
+            if (strcmp(inString4, "ledlow") == 0) { state = "LED OFF"; }
+            if (strcmp(inString4, "opencurtains") == 0) { state = "커튼 OPEN"; }
+            if (strcmp(inString4, "closecurtains") == 0) { state = "커튼 CLOSE"; }
+            if (strcmp(inString4, "curtainsauto") == 0) { state = "커튼자동화"; }
+            Serial.print(inString1);
+            Serial.println(inString4);
+        }
+        ReciveBTString = "";                                //초기화
+    }
+    if (!ReciveSRString.equals(""))                         //ReciveSRString 값이 있다면
+    {
+        Serial.print(ReciveSRString);
+        BT.print(ReciveSRString);
+
+        ReciveSRString = "";                                //초기화
+    }
+}
+나. Arduino2
+#include <Stepper.h>                                        //Step Motor library
+#include <LiquidCrystal.h>                                  //LCD sensor library
+#include <Adafruit_Sensor.h>                                //tinyDHT sensor library
+#include <DHT.h>                                            //tinyDHT sensor library
+#include <DHT_U.h>                                          //tinyDHT sensor library
+#include <Wire.h>                                           //I2C Communication(DHT)
+
+#define DHTPIN              12                              //DHT Pin
+#define DHTTYPE             DHT11                           //DHT Type
+#define led1                13                              //LED PIN1(침실)
+#define led2                A2                              //LED PIN2(냉장고)
+#define photo1              A0                              //PHOTO PIN1
+#define photo2              A1                              //PhOTO PIN2
+
+const int stepsPerRevolution = 2048;                        //2048:한바퀴(360도), 1024:반바퀴(180도)
+float photo;
+
+Stepper myStepper(stepsPerRevolution, 8, 10, 9, 11);        //Step Motor Drive PIN(IN4, IN2, IN3, IN1)
+
+DHT_Unified dht(DHTPIN, DHTTYPE);                           //DHT Structure Setup
+sensors_event_t event;                                      //DHT 이벤트주소 변수 선언
+
+LiquidCrystal lcd(2, 3, 4, 5, 6, 7);                        //LCD PIN(RS,E,DB4,DB5,DB6,DB7)
+
+byte hangultext_on[8] =                                     //LCD 한글 텍스트(온)
+{
+    0b01110,
+    0b01010,
+    0b01110,
+    0b00100,
+    0b11111,
+    0b01000,
+    0b01000,
+    0b01111,
+};
+
+byte hangultext_do[8] =                                     //LCD 한글 텍스트(도)
+{
+    0b01110,
+    0b01000,
+    0b01110,
+    0b00100,
+    0b11111,
+    0b00000,
+    0b00000,
+    0b00000,
+};
+
+byte hangultext_seub[8] =                                   //LCD 한글 텍스트(습)
+{
+    0b00100,
+    0b01010,
+    0b10001,
+    0b11111,
+    0b01010,
+    0b01110,
+    0b01010,
+    0b01110,
+};
+
+byte signtext[8] =                                         //LCD 기호 텍스트(˚)
+{
+    0b11100,
+    0b10100,
+    0b11100,
+    0b00000,
+    0b00000,
+    0b00000,
+    0b00000,
+    0b00000,
+};
+
+byte bluetoothImage1[8] =
+{
+    0b00001,
+    0b00001,
+    0b00001,
+    0b00001,
+    0b01001,
+    0b00101,
+    0b00011,
+    0b00001,
+};
+
+byte bluetoothImage2[8] =
+{
+    0b10000,
+    0b11000,
+    0b10100,
+    0b10010,
+    0b10001,
+    0b10010,
+    0b10100,
+    0b11000,
+};
+
+byte bluetoothImage3[8] =
+{
+    0b00001,
+    0b00011,
+    0b00101,
+    0b01001,
+    0b00001,
+    0b00001,
+    0b00001,
+    0b00001,
+};
+
+byte bluetoothImage4[8] =
+{
+    0b11000,
+    0b10100,
+    0b10010,
+    0b10001,
+    0b10010,
+    0b10100,
+    0b11000,
+    0b10000,
+};
+
+int hours;                                                  //시간 변수
+int flag;                                                   //커텐상태 변수
+int startTime = 19;                                         //기상모드 시작 시간
+int endTime = 7;                                            //기상모드 종료 시간
+
+String inString1;                                           //안드로이드 시간값 변수
+
+int delayTime = 1000;                                       //LCD Delay Time 설정
+
+char inString4[50] = { 0 };                                 //아두이노간 시리얼 통신 명령어 저장 변수
+void setup()
+{
+    Wire.begin();                                           //I2C통신 활성화
+    dht.begin();                                            //DHT센서 활성화
+    sensor_t sensor;                                        //DHT센서 sensor Structure 활성화
+
+    myStepper.setSpeed(10);                                 //Step Motor Speed
+
+    Serial.begin(9600);                                     //시리얼 통신 활성화
+
+    //온도센서 정보 Serial Print
+    dht.temperature().getSensor(&sensor);
+    Serial.println("----------------------------");
+    Serial.println("온도센서 정보");
+    Serial.println("----------------------------");
+    Serial.print("Sensor      : "); Serial.println(sensor.name);
+    Serial.print("Driver Ver  : "); Serial.println(sensor.version);
+    Serial.print("Unique ID   : "); Serial.println(sensor.sensor_id);
+    Serial.print("Max Value   : "); Serial.print(sensor.max_value); Serial.println("  ˚C");
+    Serial.print("Min Value   : "); Serial.print(sensor.min_value); Serial.println("   ˚C");
+    Serial.print("Resolution  : "); Serial.print(sensor.resolution); Serial.println("   ˚C");
+    Serial.println("----------------------------");
+
+    Serial.println();
+
+    //습도센서 정보 Serial Print
+    dht.humidity().getSensor(&sensor);
+    Serial.println("----------------------------");
+    Serial.println("습도센서 정보");
+    Serial.println("----------------------------");
+    Serial.print("Sensor      : "); Serial.println(sensor.name);
+    Serial.print("Driver Ver  : "); Serial.println(sensor.version);
+    Serial.print("Unique ID   : "); Serial.println(sensor.sensor_id);
+    Serial.print("Max Value   : "); Serial.print(sensor.max_value); Serial.println("  %");
+    Serial.print("Min Value   : "); Serial.print(sensor.min_value); Serial.println("  %");
+    Serial.print("Resolution  : "); Serial.print(sensor.resolution); Serial.println("   %");
+    Serial.println("----------------------------");
+
+    analogReference(INTERNAL);                              //PC0 ~ PC5 OUTPUT 1.1V
+
+    pinMode(led1, OUTPUT);                                  //LED1(침실) Setup                                  
+    pinMode(led2, OUTPUT);                                  //LED2(냉장고) Setup
+    lcd.begin(16, 2);                                       //LCD 16글자 2줄 활성화
+    lcd.clear();                                            //LCD 초기화
+    lcd.createChar(0, hangultext_on);                       //LCD 표시 문자 정의(온)_0
+    lcd.createChar(1, hangultext_do);                       //LCD 표시 문자 정의(도)_1
+    lcd.createChar(2, hangultext_seub);                     //LCD 표시 문자 정의(습)_2
+    lcd.createChar(3, signtext);                            //LCD 표시 기호 정의(˚)_3
+    lcd.createChar(4, bluetoothImage1);                     //LCD 표시 블루투스 이미지 정의_4
+    lcd.createChar(5, bluetoothImage2);                     //LCD 표시 블루투스 이미지 정의_5
+    lcd.createChar(6, bluetoothImage3);                     //LCD 표시 블루투스 이미지 정의_6
+    lcd.createChar(7, bluetoothImage4);                     //LCD 표시 블루투스 이미지 정의_7
+    logoLcdPrint();
+    delay(5000);
+}
+
+void loop()
+{
+    photo = (analogRead(photo1) + analogRead(photo2)) / 2;          //2개 조도 센서 평균
+
+    stepMotorAutoControll(photo);
+
+    lcdTempHumiPrint();
+
+    serialCommunication(photo);
+
+    delay(1000);                                            //전체 딜레이
+}
+
+void logoLcdPrint()
+{
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.write(byte(4));
+    lcd.write(byte(5));
+    lcd.write(" Smart Home");
+    lcd.setCursor(0, 1);
+    lcd.write(byte(6));
+    lcd.write(byte(7));
+    lcd.write(" for Arduino");
+}
+
+//스텝모터 자동제어
+void stepMotorAutoControll(int photoAvr)
+{
+    if (startTime <= hours && endTime > hours)
+    {
+        if (photoAvr <= 350 && flag == 1)
+        {
+            curtainsClose();
+        }
+
+        else if (photoAvr > 350 && flag == 0)
+        {
+            curtainsOpen();
+        }
+    }
+}
+
+//스텝모터 수동제어
+void stepMotorManualControll()
+{
+    if (strcmp(inString4, "opencurtains") == 0 && flag == 0)
+    {
+        curtainsOpen();
+    }
+
+    else if (strcmp(inString4, "closecurtains") == 0 && flag == 1)
+    {
+        curtainsClose();
+    }
+}
+
+//커텐 내림 함수
+void curtainsClose()
+{
+    digitalWrite(led1, HIGH);                               //LED1(침실) 활성화
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.write("Curtains Close");
+    Serial.print(inString1);
+    Serial.println("커튼내려감");
+    myStepper.step(stepsPerRevolution);                     //커텐 Close 
+    flag = 0;
+    delay(delayTime);
+}
+
+//커텐 올림 함수
+void curtainsOpen()
+{
+    digitalWrite(led1, LOW);                                //LED1(침실) 비활성화
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.write("Curtains Open");
+    Serial.print(inString1);
+    Serial.println("커튼올라감");
+    myStepper.step(-stepsPerRevolution);                    //커텐 Open
+    flag = 1;
+    delay(delayTime);
+}
+
+//LCD센서 온도 및 습도 프린트
+void lcdTempHumiPrint()
+{
+    lcd.clear();                                            //LCD 초기화
+
+    dht.temperature().getEvent(&event);
+    lcd.setCursor(0, 0);
+    lcd.write(byte(0));
+    lcd.write(byte(1));
+    lcd.print(":");
+    lcd.print(event.temperature, 1);                        //온도 값(소수점 1)
+    lcd.write(byte(3));
+    lcd.write("C     ");
+    lcd.write(byte(4));
+    lcd.write(byte(5));
+
+    dht.humidity().getEvent(&event);
+    lcd.setCursor(0, 1);
+    lcd.write(byte(2));
+    lcd.write(byte(1));
+    lcd.print(":");
+    lcd.print(event.relative_humidity, 1);                  //습도 값(소수점 1)
+    lcd.print(" %     ");
+    lcd.write(byte(6));
+    lcd.write(byte(7));
+}
+
+//아두이노간 통신(시리얼)
+void serialCommunication(int photoAvr)
+{
+    if (Serial.available()) {                               //시리얼 수신데이터가 있는동안
+        String inString = Serial.readStringUntil('\n');
+        delay(5);
+
+        int index1 = inString.indexOf(')');
+        int index = inString.length();
+        inString1 = inString.substring(0, index1 + 1);
+        String inString2 = inString.substring(index1 + 1, index - 1);
+        String inString3 = inString.substring(12, 14);
+
+        hours = inString3.toInt();
+        inString2.toCharArray(inString4, index);
+
+        if (strcmp(inString4, "ledhigh") == 0)
+        {
+            digitalWrite(led2, HIGH);
+            Serial.print(inString1);
+            Serial.println("LED켜짐");
+            lcd.clear();
+            lcd.setCursor(0, 0);
+            lcd.write("LED ON");
+            delay(delayTime);
+        }
+
+        if (strcmp(inString4, "ledlow") == 0)
+        {
+            digitalWrite(led2, LOW);
+            Serial.print(inString1);
+            Serial.println("LED꺼짐");
+            lcd.clear();
+            lcd.setCursor(0, 0);
+            lcd.write("LED OFF");
+            delay(delayTime);
+        }
+
+        stepMotorManualControll();
+
+        if (strcmp(inString4, "curtainsauto") == 0)
+        {
+            Serial.print(inString1);
+            Serial.println("커튼자동화");
+            lcd.clear();
+            lcd.setCursor(0, 0);
+            lcd.write("Curtains Auto");
+            stepMotorAutoControll(photoAvr);
+        }
+
+        if (strcmp(inString4, "Warning") == 0)
+        {
+            lcd.clear();
+            lcd.setCursor(0, 0);
+            lcd.write("Warning!!");
+            Serial.print(inString1);
+            Serial.println(inString4);
+            delay(delayTime);
+            lcd.clear();
+        }
+        inString = "";
+    }
+}
